@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle, XCircle, User, FileText, Clock, ChevronDown, ChevronRight } from 'lucide-react';
-import StatusBadge from '../components/ui/StatusBadge';
+import { CheckCircle, XCircle, User as UserIcon, FileText, Clock, ChevronDown, ChevronRight } from 'lucide-react';
+import StatusBadge from '../components/ui/StatusBadge.js';
 import type { AdjustmentRequest, Task } from '../../shared/types.js';
 import { taskApi } from '../utils/apiClient.js';
 
@@ -23,13 +23,19 @@ export default function AdjustmentApproval() {
       ]);
       setAdjustments(adjustmentsData as AdjustmentRequest[]);
       setTasks(tasksData as Task[]);
-      const mockUsers = [
-        { id: 'user1', name: '张三' },
-        { id: 'user2', name: '李四' },
-        { id: 'user3', name: '王五' },
-        { id: 'user4', name: '赵六' },
+      
+      const allUserIds = new Set<string>();
+      (adjustmentsData as AdjustmentRequest[]).forEach(adj => {
+        allUserIds.add(adj.requesterId);
+        if (adj.approverId) allUserIds.add(adj.approverId);
+      });
+      
+      const usersMap: { id: string; name: string }[] = [
+        { id: '228acd1f-b481-4f6b-94fe-6cd529fce9ce', name: '李工长' },
+        { id: 'ff5050f3-6357-44e1-9266-65d2dc112f07', name: '张经理' },
+        { id: '61e7f454-bddb-40ee-9968-3480b6b7a306', name: '张经理' },
       ];
-      setUsers(mockUsers);
+      setUsers(usersMap);
     } catch (error) {
       console.error('加载数据失败:', error);
     }
@@ -149,7 +155,7 @@ export default function AdjustmentApproval() {
                       </div>
                       <div className="flex items-center gap-6 text-sm text-slate-500">
                         <div className="flex items-center gap-1">
-                          <User size={14} />
+                          <UserIcon size={14} />
                           申请人: {getUserName(adj.requesterId)}
                         </div>
                         <div className="flex items-center gap-1">

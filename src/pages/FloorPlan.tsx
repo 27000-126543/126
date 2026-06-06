@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Users, HardDrive, Thermometer, ZoomIn, ZoomOut, Move, Info } from 'lucide-react';
-import h337 from 'heatmap.js';
 import type { FloorPlan as FloorPlanType, FloorArea, HeatmapData, LocationUpdate } from '@shared/types.js';
 import { floorPlanApi } from '../utils/apiClient.js';
 import Modal from '../components/ui/Modal.js';
@@ -21,45 +20,114 @@ export default function FloorPlan() {
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [showHeatmap, setShowHeatmap] = useState(true);
 
-  const heatmapContainerRef = useRef<HTMLDivElement>(null);
-  const heatmapInstanceRef = useRef<h337.Heatmap | null>(null);
+  const heatmapCanvasRef = useRef<HTMLCanvasElement>(null);
   const svgContainerRef = useRef<SVGSVGElement>(null);
 
-  useEffect(() => { loadFloorPlanData(); }, []);
+  const getColorForValue = useCallback((value: number, max: number): string => {
+    const ratio = Math.min(value / max, 1);
+    if (ratio < 0.25) {
+      const t = ratio / 0.25;
+      return `rgba(0, ${Math.round(255 * t)}, 255, 0.6)`;
+    } else if (ratio < 0.5) {
+      const t = (ratio - 0.25) / 0.25;
+      return `rgba(0, 255, ${Math.round(255 * (1 - t))}, 0.6)`;
+    } else if (ratio < 0.75) {
+      const t = (ratio - 0.5) / 0.25;
+      return `rgba(${Math.round(255 * t)}, 255, 0, 0.6)`;
+    } else {
+      const t = (ratio - 0.75) / 0.25;
+      return `rgba(255, ${Math.round(255 * (1 - t))}, 0, 0.6)`;
+    }
+  }, []);
 
-  useEffect(() => {
-    if (heatmapContainerRef.current && floorPlan && !heatmapInstanceRef.current) {
-      heatmapInstanceRef.current = h337.create({
-        container: heatmapContainerRef.current,
-        radius: 60,
-        maxOpacity: 0.6,
-        blur: 0.8,
-        gradient: {
-          0.25: 'rgb(0, 255, 0)',
-          0.5: 'rgb(255, 255, 0)',
-          0.75: 'rgb(255, 128, 0)',
-          1.0: 'rgb(255, 0, 0)'
+  const drawHeatmap = useCallback(() => {
+    const canvas = heatmapCanvasRef.current;
+    if (!canvas || !floorPlan || !showHeatmap) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    canvas.width = floorPlan.width;
+    canvas.height = floorPlan.height;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const validLocs = locations.filter(loc => 
+      typeof loc.x === 'number' && typeof loc.y === 'number' && 
+      !isNaN(loc.x) && !isNaN(loc.y) && isFinite(loc.x) && isFinite(loc.y)
+    );
+
+    if (validLocs.length === 0) return;
+
+    const radius = 60;
+    const maxValue = Math.max(validLocs.reduce((sum, loc) => sum + (loc.entityType === 'worker' ? 5 : 3), 0), 20);
+
+    const shadowCanvas = document.createElement('canvas');
+    shadowCanvas.width = canvas.width;
+    shadowCanvas.height = canvas.height;
+    const shadowCtx = shadowCanvas.getContext('2d');
+    if (!shadowCtx) return;
+
+    validLocs.forEach(loc => {
+      const value = loc.entityType === 'worker' ? 5 : 3;
+      const gradient = shadowCtx.createRadialGradient(
+        loc.x, loc.y, 0,
+        loc.x, loc.y, radius
+      );
+      gradient.addColorStop(0, `rgba(255, 255, 255, ${value / maxValue})`);
+      gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      
+      shadowCtx.globalCompositeOperation = 'lighter';
+      shadowCtx.fillStyle = gradient;
+      shadowCtx.beginPath();
+      shadowCtx.arc(loc.x, loc.y, radius, 0, Math.PI * 2);
+      shadowCtx.fill();
+    });
+
+    const imageData = shadowCtx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const alpha = data[i + 3];
+      if (alpha > 0) {
+        const ratio = alpha / 255;
+        let r = 0, g = 0, b = 0;
+        
+        if (ratio < 0.25) {
+          const t = ratio / 0.25;
+          g = Math.round(255 * t);
+          b = 255;
+        } else if (ratio < 0.5) {
+          const t = (ratio - 0.25) / 0.25;
+          g = 255;
+          b = Math.round(255 * (1 - t));
+        } else if (ratio < 0.75) {
+          const t = (ratio - 0.5) / 0.25;
+          r = Math.round(255 * t);
+          g = 255;
+        } else {
+          const t = (ratio - 0.75) / 0.25;
+          r = 255;
+          g = Math.round(255 * (1 - t));
         }
-      });
+        
+        data[i] = r;
+        data[i + 1] = g;
+        data[i + 2] = b;
+        data[i + 3] = Math.round(alpha * 0.6);
+      }
     }
-  }, [floorPlan]);
+
+    ctx.putImageData(imageData, 0, 0);
+  }, [locations, floorPlan, showHeatmap, getColorForValue]);
 
   useEffect(() => {
-    if (heatmapInstanceRef.current && locations.length > 0 && showHeatmap) {
-      const maxValue = Math.max(locations.length * 5, 20);
-      const points = locations.map(loc => ({
-        x: Math.round(loc.x),
-        y: Math.round(loc.y),
-        value: loc.entityType === 'worker' ? 5 : 3
-      }));
-      heatmapInstanceRef.current.setData({
-        max: maxValue,
-        data: points
-      });
-    } else if (heatmapInstanceRef.current && !showHeatmap) {
-      heatmapInstanceRef.current.setData({ max: 100, data: [] });
-    }
-  }, [locations, showHeatmap]);
+    loadFloorPlanData();
+  }, []);
+
+  useEffect(() => {
+    drawHeatmap();
+  }, [drawHeatmap]);
 
   const loadFloorPlanData = async () => {
     try {
@@ -121,8 +189,13 @@ export default function FloorPlan() {
   const getAreaHeatmap = (areaId: string) => heatmap.find(h => h.areaId === areaId);
   const getAreaLocations = (areaName: string) => locations.filter(l => l.area === areaName);
 
-  const workerLocations = locations.filter(l => l.entityType === 'worker');
-  const equipmentLocations = locations.filter(l => l.entityType === 'equipment');
+  const validLocations = locations.filter(loc => 
+    typeof loc.x === 'number' && typeof loc.y === 'number' && 
+    !isNaN(loc.x) && !isNaN(loc.y) && isFinite(loc.x) && isFinite(loc.y)
+  );
+
+  const workerLocations = validLocations.filter(l => l.entityType === 'worker');
+  const equipmentLocations = validLocations.filter(l => l.entityType === 'equipment');
 
   return (
     <div className="h-screen flex flex-col bg-slate-100">
@@ -163,7 +236,7 @@ export default function FloorPlan() {
             <span className="text-slate-600 flex items-center gap-1"><HardDrive size={12} />设备</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-4 h-1 bg-gradient-to-r from-green-500 via-yellow-500 to-red-500" />
+            <div className="w-4 h-1 bg-gradient-to-r from-cyan-500 via-green-500 via-yellow-500 to-red-500" />
             <span className="text-slate-600">热力密度</span>
           </div>
           <div className="border-t border-slate-200 pt-2 mt-2">
@@ -176,14 +249,16 @@ export default function FloorPlan() {
 
         {floorPlan && (
           <div className="relative w-full h-full" onWheel={handleWheel}>
-            <div
-              ref={heatmapContainerRef}
-              className="absolute inset-0 z-10 pointer-events-none"
+            <canvas
+              ref={heatmapCanvasRef}
+              className="absolute z-10 pointer-events-none"
               style={{
                 transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
                 transformOrigin: '0 0',
                 width: floorPlan.width,
-                height: floorPlan.height
+                height: floorPlan.height,
+                left: 0,
+                top: 0
               }}
             />
 
